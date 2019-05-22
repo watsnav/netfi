@@ -50,6 +50,7 @@ unsetter () {
 interface=`iw dev|awk '/Interface/ { print $2 } '`
 state=`ip addr|awk '/wlp2s0.*state.*UP/ {print "UP" } '`
 tmp=/tmp/netfi.conf
+
 # Bring up the interface
 if [[ $state = "UP" ]] ; then
 	echo "Wifi is $state! Searching for networks to connect..."
