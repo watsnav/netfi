@@ -1,0 +1,205 @@
+#! /bin/sh
+# Fed up of NetworkManager..taking things in my hands
+# For Wifi only!!!
+
+# Functions difinitions:
+update_hosts() {
+	# Updating Hosts requires an argument ip and non empty domain name
+	domain=`hostname -d`
+	if [[ -z $1 || -z $domain ]]; then
+		return -1
+	fi
+	host=`hostname`
+	FILE=/etc/hosts
+	curr_ip=`awk ' /^[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[\s|\t]*'$host'[.]'$domain'/ && !/127\.0\..*/ { print $1 }' $FILE`
+	if [[ -n $curr_ip ]] ; then
+		sed -i 's/'$curr_ip'/'$1'/' $FILE
+	else
+		echo -e "$ip\t$host.$domain\t$host" >> $FILE
+	fi
+}
+
+resolve_dns() {
+	# Updating DNS info	
+	RESOLVE_FILE=/etc/resolv.conf
+	which netconfig 2> /dev/null
+	if [[ $? -eq 1 ]] ; then
+		echo -n "Resolving dns.."
+		dns=`ip route|grep -oe "default.*via.*[0-9]*[.][0-9]*[.][0-9]*[.][0-9]*"|grep -oe "[0-9]*[.][0-9]*[.][0-9]*[.][0-9]*$"`
+		if [[ $? -eq 0 ]] ; then
+			echo "nameserver $dns" > $RESOLVE_FILE
+			echo -e "\033[1;32mdone!\033[0m"
+		else
+			echo -e "\033[1;31mNo valid route found. Please check your connection.\033[0m"
+		fi
+	else
+		netconfig update -f
+	fi
+
+}
+
+disconnect() {
+	pkill wpa_supplicant; pkill dhclient
+	ip addr flush dev $interface
+	#disconnect up: dont shutdown wifi
+	if [[ -n $1 && $1 = "up" ]]; then
+		return;
+	fi
+	ip link set dev $interface down
+}
+
+unsetter () {
+	unset -f update_hosts; unset -f resolve_dns;unset -f disconnect
+	unset domain;unset host;unset FILE;unset curr_ip;unset RESOLVE_FILE;unset dns;unset i
+	unset interface;unset network;unset state;unset wpa_conf;unset passphrase;unset ip;unset tmp
+}
+#functions declaration end here
+
+usrid=`id -u`
+if [[ $usrid -ne 0 ]]; then
+	echo "Permission denied! Run this as root"
+	exit -1
+fi
+interface=`iw dev|awk '/Interface/ { print $2 } '`
+state=`ip addr|awk '/'$interface'.*state.*UP/ {print "UP" } '`
+tmp=/tmp/netfi.conf
+
+# Bring up the interface
+if [[ $state = "UP" ]] ; then
+	echo "Wifi is UP! Scanning networks.."
+else
+	ip link set dev $interface up
+	echo "Wifi is UP! Searching for networks.."
+fi
+
+# checking if already connected 
+active=""
+iw dev $interface link|grep -i "^connected" > /dev/null
+if [[ $? -eq 0 ]]; then
+	active=`iw dev $interface link|awk -F': ' '/SSID/{print $2}'`
+fi
+# Scan active networks and select one of them
+networks=`iw dev $interface scan`
+if [[ $? -ne 0 && -z $networks ]]; then
+	#something wrong, maybe device busy
+	disconnect
+	ip link set dev $interface up
+	active=""
+	networks=`iw dev $interface scan|awk -F': ' '/SSID/{print $2}'`
+fi
+networks=`echo "$networks"|awk -F': ' '/SSID/{print $2}'`
+networks=`echo -e "$networks\nREFRESH"`
+networks=`echo -e "$networks\nQUIT"`
+if [[ -n $networks ]] ; then
+	i=0
+	PS3='Choose an option from above(eg. 1):'; export PS3
+	# Setting IFS to \n so that select command displays options correctly(eg. 1) Wifi hotspot and not 1) Wifi 2) hotspot)
+	IFS_bak=$IFS
+	IFS=$'\n'
+	while [[ -n $networks ]]; do
+		select network in $networks; do
+			case $network in
+				"REFRESH")
+					echo "Scanning networks, please be patient.."
+					networks=`iw dev $interface scan|awk -F': ' '/SSID/{print $2}'`
+					networks=`echo -e "$networks\nREFRESH"`
+					networks=`echo -e "$networks\nQUIT"`
+					break
+					;;
+				"")
+					;;
+				*)
+					networks=""
+					break;
+					;;
+			esac
+		done
+	done
+	# undoing env
+	IFS=$IFS_bak
+	PS3=""; export PS3
+	
+	if [[ $network = 'QUIT' ]]; then
+		disconnect
+		unsetter
+		exit 0
+	elif [[ $network = $active ]]; then
+		ip=`ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2`
+		if [[ -n $ip ]]; then
+			echo -e "\033[1;32mAlready Connected!\033[0m"
+			# Calling helper functions
+			update_hosts $ip	
+			resolve_dns	
+		else
+			echo -e "\033[1;31mOops!Problems with existing connection. Please try again.\033[0m"
+		fi
+		unsetter
+		exit 0
+	elif [[ -z $network ]]; then
+		unsetter
+		exit 0
+	fi
+	echo -n "Connecting to:"
+	wpa_conf=/etc/wpa_supplicant/wpa_supplicant.conf
+	awk -v RS='network={' -v OFS='\n' 'NR==1 {print} ' $wpa_conf > $tmp
+	# trim leading and following spaces from ssid
+	network=`echo "$network"|sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'`
+	grep -wo $network $wpa_conf
+	if [[ $? -eq 0 ]]; then
+		pkill wpa_supplicant; pkill dhclient
+		#Busy waiting 
+		ps -ef| grep -E -i "wpa_supplicant|dhclient" > /dev/null
+		while [[ $? -ne 0 ]]; do
+			ps -ef| grep -E -i "wpa_supplicant|dhclient" > /dev/null
+		done
+		passphrase=`awk -v RS='(network={|})' '/ssid="'$network'"/ { print } ' $wpa_conf`
+		echo -e "network={\n$passphrase\n}" >> $tmp
+		ip addr flush dev $interface
+		wpa_supplicant -B -i $interface -c $tmp
+		dhclient $interface
+		ip=`ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2`
+		if [[ -n $ip ]]; then
+			echo -e "\033[1;32mConnection Successfull!\033[0m"
+			# Calling helper functions
+			update_hosts $ip	
+			resolve_dns	
+
+		else
+			echo -e "\033[1;31mOops!Connection failed. Maybe the password is wrong, try again.\033[0m"
+			#removing entry from wpa_conf
+			awk -v RS='}\n' '!/ssid="'$network'"/ { print $0 RS } ' $wpa_conf > $tmp
+			cat $tmp > $wpa_conf
+			disconnect
+		fi
+	else
+		pkill wpa_supplicant; pkill dhclient
+		#Busy waiting 
+		while [[ $? -ne 0 ]]; do
+			ps -ef| grep -E -i "wpa_supplicant|dhclient" > /dev/null
+		done
+		echo " ssid=$network"
+		read -p "Enter authentication key :" passwd
+		passphrase=`wpa_passphrase $network $passwd`
+	       	echo "$passphrase" >> $tmp
+		ip addr flush dev $interface
+		wpa_supplicant -B -i $interface -c $tmp
+		dhclient $interface
+		ip=`ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2`
+		if [[ -n $ip ]]; then
+			echo "Connection Successfull!"
+			cat $tmp >> $wpa_conf
+			# Calling helper functions
+			update_hosts $ip	
+			resolve_dns	
+		else
+			echo -e "\033[1;31mOops!Connection failed. Maybe the password is wrong, try again.\033[0m"
+			disconnect
+		fi
+	fi
+
+else
+	echo -e "\033[31mNo active networks, please try later.\033[0m"
+	disconnect
+fi
+unsetter
+
