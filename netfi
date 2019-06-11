@@ -5,20 +5,26 @@
 # Functions difinitions:
 update_hosts() {
 	# Updating Hosts requires an argument ip and non empty domain name
-	domain=`hostname -d`
-	if [[ -z $1 || -z $domain ]]; then
+	domain=`hostname -d > /dev/null 2>&1`
+	if [[ -z $1 ]]; then
 		return -1
 	fi
 	host=`hostname`
 	FILE=/etc/hosts
 	echo -n "Updating hosts.."
-	curr_ip=`awk ' /^[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[\s|\t]*'$host'[.]'$domain'/ && !/127\.0\..*/ { print $1 }' $FILE`
+	# search for #netfi line in the hosts file and update it if found
+	curr_ip=`awk ' /#netfi$/ { print $1 }' $FILE`
+	#curr_ip=`awk ' /^[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[\s|\t]*'$host'[.]'$domain'[\t]#netfi$/ && !/127\.0\..*/ { print $1 }' $FILE`
 	if [[ -n $curr_ip ]] ; then
 		sed -i 's/'$curr_ip'/'$1'/' $FILE
 	else
-		echo -e "$ip\t$host.$domain\t$host" >> $FILE
+		if [[ -z $domain ]];then
+			echo -e "$ip\t$host\t#netfi" >> $FILE
+		else
+			echo -e "$ip\t$host.$domain\t$host\t#netfi" >> $FILE
+		fi
 	fi
-	echo -e "\033[1;32mdone!\033[0m"
+	echo -e "\033[32mdone!\033[0m"
 }
 
 resolve_dns() {
@@ -28,10 +34,10 @@ resolve_dns() {
 	dns=`ip route|grep -oe "default.*via.*[0-9]*[.][0-9]*[.][0-9]*[.][0-9]*"|grep -oe "[0-9]*[.][0-9]*[.][0-9]*[.][0-9]*$"`
 	if [[ $? -eq 0 ]] ; then
 		echo "nameserver $dns" > $RESOLVE_FILE
-		echo -e "\033[1;32mdone!\033[0m"
+		echo -e "\033[32mdone!\033[0m"
 	else
-		echo -e "\033[1;31mfailed!\033[0m"
-		echo -e "\033[1;31mNo valid route found, please check your router.\033[0m"
+		echo -e "\033[31mfailed!\033[0m"
+		echo -e "\033[31mNo valid route found, please check your router.\033[0m"
 	fi
 
 }
@@ -72,7 +78,7 @@ fi
 
 # checking if already connected 
 active=""
-iw dev $interface link|grep -i "^connected" > /dev/null
+iw dev $interface link|grep -i "^connected" > /dev/null 2>&1
 if [[ $? -eq 0 ]]; then
 	active=`iw dev $interface link|awk -F': ' '/SSID/{print $2}'`
 fi
@@ -124,12 +130,13 @@ if [[ -n $networks ]] ; then
 	elif [[ $network = $active ]]; then
 		ip=`ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2`
 		if [[ -n $ip ]]; then
-			echo -e "\033[1;32mAlready Connected!\033[0m"
+			echo -e "\033[32mAlready Connected!\033[0m"
+			dhclient -r && dhclient $interface
 			# Calling helper functions
 			update_hosts $ip	
 			resolve_dns	
 		else
-			echo -e "\033[1;31mOops!Problems with existing connection. Please try again.\033[0m"
+			echo -e "\033[31mOops!Problems with existing connection. Please try again.\033[0m"
 		fi
 		unsetter
 		exit 0
@@ -141,49 +148,91 @@ if [[ -n $networks ]] ; then
 	awk -v RS='network={' -v OFS='\n' 'NR==1 {print} ' $wpa_conf > $tmp
 	# trim leading and following spaces from ssid
 	network=`echo "$network"|sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'`
-	grep -wo "$network" $wpa_conf > /dev/null
+	grep -wo "$network" $wpa_conf > /dev/null 2>&1
 	if [[ $? -eq 0 ]]; then
-		pkill wpa_supplicant; pkill dhclient
-		#Busy waiting 
-		ps -ef| grep -E -i "wpa_supplicant|dhclient" > /dev/null
-		while [[ $? -ne 0 ]]; do
-			ps -ef| grep -E -i "wpa_supplicant|dhclient" > /dev/null
-		done
+		#pkill wpa_supplicant
+		#if [[ $? -eq 0 ]];then
+			#Busy waiting 
+		#	ps -C wpa_supplicant > /dev/null 2>&1
+		#	while [[ $? -ne 0 ]]; do
+		#		ps -C wpa_supplicant > /dev/null 2>&1
+		#	done
+		#else
+		#	echo -e "\033[1;31mProcess already running and couldn't be killed.\033[0m"
+		#fi
 		passphrase=$(awk -v RS='(network={|})' "/ssid=\"$network\"/ { print } " $wpa_conf)
 		echo -e "network={\n$passphrase\n}" >> $tmp
 		ip addr flush dev $interface
-		wpa_supplicant -B -i $interface -c $tmp
+		ps -C wpa_supplicant -o cmd h|grep "$tmp" > /dev/null 2>&1
+		if [[ $? -eq 0 ]]; then
+			wpa_cli interface|grep "Selected.*$interface" > /dev/null 2>&1
+			if [[ $? -eq 0 ]]; then
+				# reconfigure wpa with updated $tmp
+				wpa_cli reconfigure > /dev/null 2>&1 && echo "Successfully reinitialised wpa_supplicant"
+				if [[ $? -ne 0 ]]; then
+					pkill wpa_supplicant && wait
+					wpa_supplicant -B -i $interface -c $tmp
+				fi
+			else
+				pkill wpa_supplicant && wait
+				wpa_supplicant -B -i $interface -c $tmp
+			fi
+		else
+			wpa_supplicant -B -i $interface -c $tmp
+		fi
+
 		echo -n "Attempting to connect.."
-		dhclient $interface
+		dhclient -r && dhclient $interface
 		ip=`ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2`
 		if [[ -n $ip ]]; then
-			echo -e "\033[1;32msuccessfull!\033[0m"
+			echo -e "\033[32msuccessfull!\033[0m"
 			# Calling helper functions
 			update_hosts $ip	
 			resolve_dns	
 
 		else
-			echo -e "\033[1;31mOops!Connection failed. Maybe the password is wrong, try again.\033[0m"
+			echo -e "\033[31mOops!Connection failed. Maybe the password is wrong, try again.\033[0m"
 			#removing entry from wpa_conf
 			awk -v RS='}\n' '!/ssid="'$network'"/ { print $0 RS } ' $wpa_conf > $tmp
 			cat $tmp > $wpa_conf
 			disconnect
 		fi
 	else
-		pkill wpa_supplicant; pkill dhclient
-		#Busy waiting 
-		while [[ $? -ne 0 ]]; do
-			ps -ef| grep -E -i "wpa_supplicant|dhclient" > /dev/null
-		done
+		#pkill wpa_supplicant
+		#if [[ $? -eq 0 ]];then
+			#Busy waiting 
+			#ps -C wpa_supplicant > /dev/null 2>&1
+			#while [[ $? -ne 0 ]]; do
+			#	ps -C wpa_supplicant > /dev/null 2>&1
+			#done
+		#else
+		#	echo -e "\033[1;31mProcess already running and couldn't be killed.\033[0m"
+		#fi
 		echo -n "Enter authentication key :" 
 		read -s passwd
 		echo
 		passphrase=`wpa_passphrase "$network" "$passwd"`
 	       	echo "$passphrase" >> $tmp
 		ip addr flush dev $interface
-		wpa_supplicant -B -i $interface -c $tmp
+		ps -C wpa_supplicant -o cmd h|grep "$tmp" > /dev/null 2>&1
+		if [[ $? -eq 0 ]]; then
+			wpa_cli interface|grep "Selected.*$interface" > /dev/null 2>&1
+			if [[ $? -eq 0 ]]; then
+				# reconfigure wpa with updated $tmp
+				wpa_cli reconfigure > /dev/null 2>&1 && echo "Successfully reinitialised wpa_supplicant"
+				if [[ $? -ne 0 ]]; then
+					pkill wpa_supplicant && wait
+					wpa_supplicant -B -i $interface -c $tmp
+				fi
+			else
+				pkill wpa_supplicant && wait
+				wpa_supplicant -B -i $interface -c $tmp
+			fi
+		else
+			wpa_supplicant -B -i $interface -c $tmp
+		fi
 		echo -n "Attempting to connect.."
-		dhclient $interface
+		dhclient -r && dhclient $interface
 		ip=`ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2`
 		if [[ -n $ip ]]; then
 			echo -e "\033[32msuccessful!\033[0m"
@@ -192,7 +241,7 @@ if [[ -n $networks ]] ; then
 			update_hosts $ip	
 			resolve_dns	
 		else
-			echo -e "\033[1;31mConnection failed. Maybe the password is wrong, try again.\033[0m"
+			echo -e "\033[31mConnection failed. Maybe the password is wrong, try again.\033[0m"
 			disconnect
 		fi
 	fi
