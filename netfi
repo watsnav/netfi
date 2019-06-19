@@ -5,16 +5,16 @@
 # Functions difinitions:
 update_hosts() {
 	# Updating Hosts requires an argument ip and non empty domain name
-	domain=`hostname -d > /dev/null 2>&1`
+	domain=$(hostname -d 2>/dev/null)
 	if [[ -z $1 ]]; then
 		return -1
 	fi
-	host=`hostname`
+
+	host=$(hostname)
 	FILE=/etc/hosts
-	echo -n "Updating hosts.."
 	# search for #netfi line in the hosts file and update it if found
-	curr_ip=`awk ' /#netfi$/ { print $1 }' $FILE`
-	#curr_ip=`awk ' /^[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[\s|\t]*'$host'[.]'$domain'[\t]#netfi$/ && !/127\.0\..*/ { print $1 }' $FILE`
+	curr_ip=$(awk ' /#netfi$/ { print $1 }' $FILE)
+	#curr_ip=$(awk ' /^[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[\s|\t]*'$host'[.]'$domain'[\t]#netfi$/ && !/127\.0\..*/ { print $1 }' $FILE)
 	if [[ -n $curr_ip ]] ; then
 		sed -i 's/'$curr_ip'/'$1'/' $FILE
 	else
@@ -31,7 +31,7 @@ resolve_dns() {
 	# Updating DNS info	
 	RESOLVE_FILE=/etc/resolv.conf
 	echo -n "Resolving dns.."
-	dns=`ip route|grep -oe "default.*via.*[0-9]*[.][0-9]*[.][0-9]*[.][0-9]*"|grep -oe "[0-9]*[.][0-9]*[.][0-9]*[.][0-9]*$"`
+	dns=$(ip route|grep -oe "default.*via.*[0-9]*[.][0-9]*[.][0-9]*[.][0-9]*"|grep -oe "[0-9]*[.][0-9]*[.][0-9]*[.][0-9]*$")
 	if [[ $? -eq 0 ]] ; then
 		echo "nameserver $dns" > $RESOLVE_FILE
 		echo -e "\033[32mdone!\033[0m"
@@ -59,13 +59,13 @@ unsetter () {
 }
 #functions declaration end here
 
-usrid=`id -u`
+usrid=$(id -u)
 if [[ $usrid -ne 0 ]]; then
 	echo "Permission denied! Run this as root"
 	exit -1
 fi
-interface=`iw dev|awk '/Interface/ { print $2 } '`
-state=`ip addr|awk '/'$interface'.*state.*UP/ {print "UP" } '`
+interface=$(iw dev|awk '/Interface/ { print $2 } ')
+state=$(ip addr|awk '/'$interface'.*state.*UP/ {print "UP" } ')
 tmp=/tmp/netfi.conf
 
 # Bring up the interface
@@ -80,20 +80,20 @@ fi
 active=""
 iw dev $interface link|grep -i "^connected" > /dev/null 2>&1
 if [[ $? -eq 0 ]]; then
-	active=`iw dev $interface link|awk -F': ' '/SSID/{print $2}'`
+	active=$(iw dev $interface link|awk -F': ' '/SSID/{print $2}')
 fi
 # Scan active networks and select one of them
-networks=`iw dev $interface scan`
+networks=$(iw dev $interface scan 2>/dev/null)
 if [[ $? -ne 0 && -z $networks ]]; then
 	#something wrong, maybe device busy
 	disconnect
 	ip link set dev $interface up
 	active=""
-	networks=`iw dev $interface scan|awk -F': ' '/SSID/{print $2}'`
+	networks=$(iw dev $interface scan 2>/dev/null |awk -F': ' '/SSID/{print $2}')
 fi
-networks=`echo "$networks"|awk -F': ' '/SSID/{print $2}'`
-networks=`echo -e "$networks\nREFRESH"`
-networks=`echo -e "$networks\nQUIT"`
+networks=$(echo "$networks"|awk -F': ' '/SSID/{print $2}')
+networks=$(echo -e "$networks\nREFRESH")
+networks=$(echo -e "$networks\nQUIT")
 if [[ -n $networks ]] ; then
 	i=0
 	PS3='Choose an option from above(eg. 1):'; export PS3
@@ -105,9 +105,9 @@ if [[ -n $networks ]] ; then
 			case $network in
 				"REFRESH")
 					echo "Scanning networks, please be patient.."
-					networks=`iw dev $interface scan|awk -F': ' '/SSID/{print $2}'`
-					networks=`echo -e "$networks\nREFRESH"`
-					networks=`echo -e "$networks\nQUIT"`
+					networks=$(iw dev $interface scan 2>/dev/null |awk -F': ' '/SSID/{print $2}')
+					networks=$(echo -e "$networks\nREFRESH")
+					networks=$(echo -e "$networks\nQUIT")
 					break
 					;;
 				"")
@@ -128,15 +128,16 @@ if [[ -n $networks ]] ; then
 		unsetter
 		exit 0
 	elif [[ $network = $active ]]; then
-		ip=`ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2`
+		ip=$(ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2)
 		if [[ -n $ip ]]; then
-			echo -e "\033[32mAlready Connected!\033[0m"
+			echo -ne "\033[32mAlready Connected!\033[0m\nUpdating hosts.."
 			dhclient -r && dhclient $interface
 			# Calling helper functions
 			update_hosts $ip	
 			resolve_dns	
 		else
 			echo -e "\033[31mOops!Problems with existing connection. Please try again.\033[0m"
+			disconnect up;
 		fi
 		unsetter
 		exit 0
@@ -147,7 +148,7 @@ if [[ -n $networks ]] ; then
 	wpa_conf=/etc/wpa_supplicant/wpa_supplicant.conf
 	awk -v RS='network={' -v OFS='\n' 'NR==1 {print} ' $wpa_conf > $tmp
 	# trim leading and following spaces from ssid
-	network=`echo "$network"|sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'`
+	network=$(echo "$network"|sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 	grep -wo "$network" $wpa_conf > /dev/null 2>&1
 	if [[ $? -eq 0 ]]; then
 		#pkill wpa_supplicant
@@ -183,9 +184,9 @@ if [[ -n $networks ]] ; then
 
 		echo -n "Attempting to connect.."
 		dhclient -r && dhclient $interface
-		ip=`ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2`
+		ip=$(ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2)
 		if [[ -n $ip ]]; then
-			echo -e "\033[32msuccessfull!\033[0m"
+			echo -ne "\033[32msuccessfull!\033[0m\nUpdating hosts.."
 			# Calling helper functions
 			update_hosts $ip	
 			resolve_dns	
@@ -211,7 +212,7 @@ if [[ -n $networks ]] ; then
 		echo -n "Enter authentication key :" 
 		read -s passwd
 		echo
-		passphrase=`wpa_passphrase "$network" "$passwd"`
+		passphrase=$(wpa_passphrase "$network" "$passwd")
 	       	echo "$passphrase" >> $tmp
 		ip addr flush dev $interface
 		ps -C wpa_supplicant -o cmd h|grep "$tmp" > /dev/null 2>&1
@@ -233,9 +234,9 @@ if [[ -n $networks ]] ; then
 		fi
 		echo -n "Attempting to connect.."
 		dhclient -r && dhclient $interface
-		ip=`ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2`
+		ip=$(ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2)
 		if [[ -n $ip ]]; then
-			echo -e "\033[32msuccessful!\033[0m"
+			echo -ne "\033[32msuccessful!\033[0m\nUpdating hosts.."
 			cat $tmp >> $wpa_conf
 			# Calling helper functions
 			update_hosts $ip	
