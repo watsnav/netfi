@@ -133,7 +133,7 @@ if [[ -n $networks ]] ; then
 			echo -ne "\033[32mAlready Connected!\033[0m\nUpdating hosts.."
 			dhclient -r && dhclient $interface
 			# Calling helper functions
-			update_hosts $ip	
+			#update_hosts $ip	
 			resolve_dns	
 		else
 			echo -e "\033[31mOops!Problems with existing connection. Please try again.\033[0m"
@@ -188,7 +188,7 @@ if [[ -n $networks ]] ; then
 		if [[ -n $ip ]]; then
 			echo -ne "\033[32msuccessfull!\033[0m\nUpdating hosts.."
 			# Calling helper functions
-			update_hosts $ip	
+			#update_hosts $ip	
 			resolve_dns	
 
 		else
@@ -239,7 +239,7 @@ if [[ -n $networks ]] ; then
 			echo -ne "\033[32msuccessful!\033[0m\nUpdating hosts.."
 			cat $tmp >> $wpa_conf
 			# Calling helper functions
-			update_hosts $ip	
+			#update_hosts $ip	
 			resolve_dns	
 		else
 			echo -e "\033[31mConnection failed. Maybe the password is wrong, try again.\033[0m"
