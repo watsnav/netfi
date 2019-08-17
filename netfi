@@ -30,7 +30,6 @@ update_hosts() {
 resolve_dns() {
 	# Updating DNS info	
 	RESOLVE_FILE=/etc/resolv.conf
-	echo -n "Resolving dns.."
 	dns=$(ip route|grep -oe "default.*via.*[0-9]*[.][0-9]*[.][0-9]*[.][0-9]*"|grep -oe "[0-9]*[.][0-9]*[.][0-9]*[.][0-9]*$")
 	if [[ $? -eq 0 ]] ; then
 		echo "nameserver $dns" > $RESOLVE_FILE
@@ -130,7 +129,7 @@ if [[ -n $networks ]] ; then
 	elif [[ $network = $active ]]; then
 		ip=$(ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2)
 		if [[ -n $ip ]]; then
-			echo -ne "\033[32mAlready Connected!\033[0m\nUpdating hosts.."
+			echo -ne "\033[32mAlready Connected!\033[0m\nResolving dns.."
 			dhclient -r && dhclient $interface
 			# Calling helper functions
 			#update_hosts $ip	
@@ -186,7 +185,7 @@ if [[ -n $networks ]] ; then
 		dhclient -r && dhclient $interface
 		ip=$(ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2)
 		if [[ -n $ip ]]; then
-			echo -ne "\033[32msuccessfull!\033[0m\nUpdating hosts.."
+			echo -ne "\033[32msuccessfull!\033[0m\nResolving dns.."
 			# Calling helper functions
 			#update_hosts $ip	
 			resolve_dns	
@@ -236,7 +235,7 @@ if [[ -n $networks ]] ; then
 		dhclient -r && dhclient $interface
 		ip=$(ip route|grep -oe 'src.*[0-9]*[.][0-9][.]*[0-9][.]*[0-9]*'|cut -d " " -f 2)
 		if [[ -n $ip ]]; then
-			echo -ne "\033[32msuccessful!\033[0m\nUpdating hosts.."
+			echo -ne "\033[32msuccessful!\033[0m\nResolving dns.."
 			cat $tmp >> $wpa_conf
 			# Calling helper functions
 			#update_hosts $ip	
