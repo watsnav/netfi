@@ -64,6 +64,11 @@ if [[ $usrid -ne 0 ]]; then
 	exit -1
 fi
 interface=$(iw dev|awk '/Interface/ { print $2 } ')
+if [[ -n $1 ]] && [[ $1 = "-q" ]]; then
+	disconnect
+	unsetter
+	exit 0
+fi
 state=$(ip addr|awk '/'$interface'.*state.*UP/ {print "UP" } ')
 tmp=/tmp/netfi.conf
 
