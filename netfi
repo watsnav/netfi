@@ -88,7 +88,7 @@ if [ $? -eq 0 ]; then
 fi
 # Scan active networks and select one of them
 networks=$(iw dev $interface scan 2>/dev/null)
-if [ $? -ne 0 ] && [-z "$networks" ]; then
+if [ $? -ne 0 ] && [ -z "$networks" ]; then
 	#something wrong, maybe device busy
 	disconnect
 	ip link set dev $interface up
@@ -111,7 +111,6 @@ if [ -n "$networks" ] ; then
 				"REFRESH")
 					echo "Scanning networks, please be patient.."
 					networks=$(iw dev $interface scan 2>/dev/null |awk -F': ' '/SSID/{print $2}')
-					networks=$(echo -e "$networks\nHIDDEN?")
 					networks=$(echo -e "$networks\nREFRESH")
 					networks=$(echo -e "$networks\nQUIT")
 					break
@@ -158,7 +157,7 @@ if [ -n "$networks" ] ; then
 	wpa_conf=/etc/wpa_supplicant/wpa_supplicant.conf
 	awk -v RS='network={' -v OFS='\n' 'NR==1 {print} ' $wpa_conf > $tmp
 	# trim leading and following spaces from ssid
-	network=$(echo "$network"|sed -e 's/^[:space:]*//' -e 's/[:space:]*$//')
+	network=$(echo "$network"|sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 	grep -wo "$network" $wpa_conf > /dev/null 2>&1
 	if [ $? -eq 0 ]; then
 		#pkill wpa_supplicant
